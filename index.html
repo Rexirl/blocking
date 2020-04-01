@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html>
+	<head>
+        <meta charset="utf-8">
+		<title>Blocking experiment</title>
+		<style>
+			body { margin: 0; overflow: hidden; }
+			canvas { width: 100%; height: 100%; }
+            
+			html, body {
+				width: 100%;
+				height: 100%;
+			}
+
+			body {
+				background-color: #ffffff;
+				margin: 0;
+				overflow: hidden;
+				font-family: arial;
+			}
+
+			#blocker {
+
+				position: absolute;
+
+				width: 100%;
+				height: 100%;
+
+				background-color: rgba(0,0,0,0.5);
+
+			}
+
+			#instructions {
+
+				width: 100%;
+				height: 100%;
+
+				display: -webkit-box;
+				display: -moz-box;
+				display: box;
+
+				-webkit-box-orient: horizontal;
+				-moz-box-orient: horizontal;
+				box-orient: horizontal;
+
+				-webkit-box-pack: center;
+				-moz-box-pack: center;
+				box-pack: center;
+
+				-webkit-box-align: center;
+				-moz-box-align: center;
+				box-align: center;
+
+				color: #ffffff;
+				text-align: center;
+
+				cursor: pointer;
+
+			}
+		</style>
+	</head>
+	<body>
+		<script src="../js/three.js"></script>
+        <script src="../js/dat.gui.min.js"></script>
+        <script type='x-shader/x-vertex' id='vertexshader'>
+            uniform vec3 u_characterPos;
+            
+            attribute float occlusion;
+            
+            varying float v_occlusion;
+            varying float v_characterDist;
+            varying vec3 v_normal;
+
+            void main() {
+                v_occlusion = occlusion;
+                vec4 viewPos = modelViewMatrix * vec4(position, 1.0);
+                v_characterDist = length(vec3(viewPos) - u_characterPos);
+
+                v_normal = vec3(modelMatrix * vec4(normal, 0.0));
+                gl_Position = projectionMatrix * viewPos;
+            }
+        </script>
+
+        <script type='x-shader/x-fragment' id='fragmentshader'>
+            precision mediump float;
+
+            uniform vec3 u_fogColor;
+            uniform float u_fogMaxDist;
+            uniform float u_fogMinDist;
+            uniform sampler2D baseMap;
+
+            varying float v_occlusion;
+            varying vec3 v_normal;
+            varying float v_characterDist;
+
+            float computeLinearFogFactor() {
+                float factor;
+                factor = (u_fogMaxDist - v_characterDist) /
+                         (u_fogMaxDist - u_fogMinDist );
+                factor = clamp(factor, 0.0, 1.0);
+                return factor;            
+            }
+
+            void main() {
+                float fogFactor = computeLinearFogFactor();
+                vec3 baseColor = vec3(1.0); // - to do: from texture
+                baseColor.rgb *= max(0.0, dot(v_normal, normalize(vec3(1.0, 0.7, 0.3))));
+                float ambientFactor = 0.5;
+                //baseColor.rgb += u_fogColor * ambientFactor;
+                baseColor.rgb *= 0.75; // - to do: use light uniform(s)
+                baseColor.rgb += vec3(0.5) * ambientFactor;
+                baseColor *= v_occlusion;
+                gl_FragColor = vec4(mix(u_fogColor, baseColor, fogFactor), 1.0);
+            }
+        </script>
+        
+        <script type='x-shader/x-vertex' id='vertexshader_highlight'>
+            varying vec2 a_uv;
+            
+            void main() {
+                a_uv = uv;
+                vec4 viewPos = modelViewMatrix * vec4(position, 1.0);
+                gl_Position = projectionMatrix * viewPos;
+            }
+        </script>
+
+        <script type='x-shader/x-fragment' id='fragmentshader_highlight'>
+            precision mediump float;
+            varying vec2 a_uv;
+            uniform sampler2D baseMap;
+            uniform float time;
+            uniform vec3 color;
+
+            void main() {
+                vec3 edges;
+                vec2 edgeDists = abs(a_uv - vec2(0.5));
+                float edgeDist = max(edgeDists.x, edgeDists.y);
+                float opacity = smoothstep(0.4, 0.45, edgeDist);
+                opacity = 0.6 * smoothstep(0.45, 0.48, edgeDist);
+                float timeFactor = pow(sin(time * 4.0), 2.0) * 0.5 + 0.5;
+                timeFactor = mix(1.0, timeFactor, 0.6);
+                //opacity *= smoothstep(0.2, 0.15, abs(vec3(0.5) - a_uv
+                vec3 col = color;
+                col = mix((vec3(1.0) - col).rbg, col, timeFactor);
+                gl_FragColor = vec4(col, opacity * timeFactor);
+            }
+        </script>
+        
+        <script src="js/PointerLockControls.js"></script>
+        <script src="js/Blocking.js"></script>
+        
+        <div id="blocker">
+
+			<div id="instructions">
+				<span style="font-size:40px">Click to play</span>
+				<br />
+				(W, A, S, D = Move, <!--SPACE = Jump,--> R, F = Up, Down, MOUSE = Look around)
+			</div>
+
+		</div>
+        
+		<script>
+            const uniforms = {
+                color: { value: new THREE.Color(0xffffff) },
+                time: { value: 0.0 },
+                
+                u_fogColor: { type: 'c', value: new THREE.Color(0xffffff) },
+                u_fogMinDist: { value: 0.0 },
+                u_fogMaxDist: { value: 0.0 },
+                u_characterPos: { value: new THREE.Vector3(0, 0, 0) }
+            };
+            const mat = new THREE.ShaderMaterial( {
+                uniforms:       uniforms,
+                vertexShader:   document.getElementById('vertexshader').textContent,
+                fragmentShader: document.getElementById('fragmentshader').textContent,
+            });
+
+			const renderer = new THREE.WebGLRenderer({ antialias: true });
+			renderer.setSize(window.innerWidth, window.innerHeight);
+			document.body.appendChild(renderer.domElement);
+            
+			const scene = new THREE.Scene();
+			const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+            const cameraPole = new THREE.Object3D();
+            scene.add(cameraPole);
+            cameraPole.add(camera);
+            
+            const onWindowResize = () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+            window.addEventListener('resize', onWindowResize, false);
+            
+            const rand = (min, max) => {
+                if (max === undefined) {
+                    max = min;
+                    min = 0;
+                }
+                return min + (max - min) * Math.random();
+            }
+            const randInt = (min, max) => { // inclusive, exclusive
+                min = Math.ceil(min);
+                max = Math.floor(max);
+                return Math.floor(Math.random() * (max - min)) + min;
+            }
+            const clamp = (num, min, max) => {
+                return min > num ? num : max < num ? max : num;
+            }
+            
+            
+            const world = new BlockWorld(scene, mat);
+            world.generate(camera, camera.position);
+            
+            
+            const maxObjects = 400;
+            const objects = [];
+            objects.length = maxObjects;
+            for (let i = 0; i < objects.length; ++i) {
+                objects[i] = { numParticles: 0, mesh: null };
+            }
+            const options = {
+                display: {
+                    wireframe: false,
+                    background: 0x839bb1,
+                    generate: true,
+                },
+                quality: {
+                    viewDistance: 6 / (world.chunkResolution.x / 16),//4,
+                    generators: 4,
+                },
+                movement: {
+                    mode: 'fly',
+                    speed: 200,
+                    multiJump: false,
+                    jumpSpeed: 30,
+                    resetPosition: () => {alert('here')},
+                },
+                
+                reset: () => {
+                    // - to do
+                }
+            }
+            //const options = JSON.parse(JSON.stringify(defaultOptions));
+            
+            /*let lightColor = 0xFFFFFF;
+            lightColor = 0xCCCCCC;
+            
+            var light = new THREE.PointLight(lightColor, 1, 1000)
+            light.position.set(0, 60, 0);
+            scene.add(light);
+
+            var light = new THREE.PointLight(lightColor, 2, 1000)
+            light.position.set(0, 60, 25);
+            scene.add(light);*/
+            
+            const controls = new THREE.PointerLockControls( camera );
+            const blocker = document.getElementById( 'blocker' );
+            const instructions = document.getElementById( 'instructions' );
+
+            instructions.addEventListener('click', () => controls.lock(), false);
+            controls.addEventListener('lock', function () {
+                instructions.style.display = 'none';
+                blocker.style.display = 'none';
+            });
+            controls.addEventListener('unlock', function () {
+                blocker.style.display = 'block';
+                instructions.style.display = '';
+            });
+            scene.add(controls.getObject());
+
+            const onKeyDown = event => {
+                isSprinting = !!event.shiftKey;
+                switch (event.keyCode) {
+                    case 38: // up
+                    case 87: // w
+                        moveForward = true;
+                        break;
+
+                    case 37: // left
+                    case 65: // a
+                        moveLeft = true;
+                        break;
+
+                    case 40: // down
+                    case 83: // s
+                        moveBackward = true;
+                        break;
+
+                    case 39: // right
+                    case 68: // d
+                        moveRight = true;
+                        break;
+                        
+                    case 82: // r
+                        moveUp = true;
+                        break;
+                    
+                    case 70: // f
+                        moveDown = true;
+                        break;
+
+                    case 32: // space
+                        if (canJump === true || options.movement.multiJump) {
+                            velocity.y = options.movement.jumpSpeed;
+                        }
+                        canJump = false;
+                        break;
+                }
+            };
+
+            const onKeyUp = event => {
+                isSprinting = !!event.shiftKey;
+                switch (event.keyCode) {
+                    case 38: // up
+                    case 87: // w
+                        moveForward = false;
+                        break;
+
+                    case 37: // left
+                    case 65: // a
+                        moveLeft = false;
+                        break;
+
+                    case 40: // down
+                    case 83: // s
+                        moveBackward = false;
+                        break;
+                        
+                    case 82: // r
+                        moveUp = false;
+                        break;
+                    
+                    case 70: // f
+                        moveDown = false;
+                        break;
+
+                    case 39: // right
+                    case 68: // d
+                        moveRight = false;
+                        break;
+                }
+            };
+            
+            const onMouseDown = event => {
+                switch (event.button) {
+                    case 0: // left
+                        // - to do
+                        break;
+                    case 1: // middle
+                        // - to do
+                        break;
+                    case 2: // right
+                        // - to do
+                        break;
+                }
+            };
+
+            document.addEventListener('keydown', onKeyDown, false);
+            document.addEventListener('keyup', onKeyUp, false);
+            document.addEventListener('mousedown', onMouseDown, false);
+            
+            
+			var moveForward = false;
+			var moveBackward = false;
+			var moveLeft = false;
+			var moveRight = false;
+            var moveUp = false;
+            var moveDown = false;
+			var canJump = false;
+            var isSprinting = false;
+            
+			var velocity = new THREE.Vector3();
+			var direction = new THREE.Vector3();
+            let resetPosition = false;
+            
+            
+            const setUpGui = () => {
+                const gui = new dat.GUI();
+                
+                //gui.add(options, 'reset');
+                
+                const display = gui.addFolder('Display');
+                //display.add(options.display, 'wireframe');
+                display.addColor(options.display, 'background');
+                display.add(options.display, 'generate');
+                display.open();
+                
+                const quality = gui.addFolder('Quality');
+                quality.add(options.quality, 'viewDistance', 2, 16).step(1);
+                quality.add(options.quality, 'generators', 1, 8).step(1);
+                quality.open();
+                
+                const movement = gui.addFolder('Movement');
+                movement.add(options.movement, 'mode', ['fly', 'walk', 'noclip']);
+                movement.add(options.movement, 'speed', 50, 400);
+                movement.add(options.movement, 'multiJump');
+                movement.add(options.movement, 'jumpSpeed', 10, 100);
+                movement.add(options.movement, 'resetPosition');
+                movement.open();
+                
+                gui.close();
+            }
+            setUpGui();
+            
+            const createHighlight = () => {
+                const size = 1.005; // - bad way of (kind of) circumventing depth test
+                const geometry = new THREE.BoxGeometry(size, size, size);
+                //const material = new THREE.MeshBasicMaterial({color: 0x00ff00});
+                //const material = new THREE.MeshLambertMaterial({color: 0x668822, transparent: true, opacity: 0.5});
+                const uniforms = {
+                    color: { value: new THREE.Vector3(0.4, 0.6, 0.1) },
+                    time: { value: 0.0 },
+                }
+                const material = new THREE.ShaderMaterial( {
+                    uniforms: uniforms,
+                    vertexShader:   document.getElementById('vertexshader_highlight').textContent,
+                    fragmentShader: document.getElementById('fragmentshader_highlight').textContent,
+                    transparent: true, opacity: 0.5
+                });
+                const cube = new THREE.Mesh(geometry, material);
+                scene.add(cube);
+                cube.visible = false;
+                return {mesh: cube, uniforms: uniforms};
+            }
+            const highlight = createHighlight();
+            
+            {
+                const co = controls.getObject();
+                //co.position.z = 20;
+                // View of four pillars and the amphitheatre edge:
+                // (at least with view distance > 4)
+                co.position.x = 64.064;
+                co.position.y = 27.462;
+                co.position.z = 28.796;
+                co.rotation.y = 1.488;
+            }
+            const initialPosition = controls.getObject().position.clone();
+            options.movement.resetPosition = () => {
+                resetPosition = true;
+            }
+            {
+                const color = 0xFFFFFF;  // white
+                const near = 30;
+                const far = 100;
+                scene.fog = new THREE.Fog(color, near, far);
+                uniforms.u_fogMinDist.value = near;
+                uniforms.u_fogMaxDist.value = far;
+            }
+            
+
+            let animationTime = 0.0;
+            let lastTime = 0.0;
+			const render = (time) => {
+				requestAnimationFrame(render);
+                time *= 0.001;
+                const dt = time - lastTime;
+                lastTime = time;
+                
+                
+                uniforms.u_characterPos.value = new THREE.Vector3(0, 0, 0);
+                world.setWireframe(options.wireframe);
+                const position = controls.getObject().position;
+                if (resetPosition) {
+                    position.copy(initialPosition);
+                    velocity = new THREE.Vector3();
+                    resetPosition = false;
+                }
+                const lastPosition = position.clone();
+                /*{ // - temporary animation:
+                    const r = 10.0;
+                    const T = 0.1;
+                    const t = time;
+                    position.x = r * Math.cos(t * Math.PI * 2.0 * T);
+                    position.z = r * Math.sin(t * Math.PI * 2.0 * T) + 10.0;
+                    position.y = t * 2.0;
+                }*/
+                
+                { // handle movement
+                    const mode = options.movement.mode;
+                    let onObject = true;
+                    
+                    let close = undefined;
+                    if (options.movement.mode !== 'noclip') {
+                        const p = new THREE.Vector3(position.x, position.y, position.z);
+                        close = world.findNear(p);
+                    } else {
+                        // no highlight in noclip mode
+                        highlight.mesh.visible = false;
+                    }
+                    
+                    const height = 2.5; // - to do: tune this
+                    const down = new THREE.Vector3(0, -1, 0);
+                    /*onObject = world.distance(position, down) <= height;
+                    const minY = 3.0;
+                    if (position.y < minY) {
+                        onObject = true;
+                        position.y = minY;
+                    }*/
+                    
+                    if (mode === 'walk') {
+                        //const onThreshold = 3.0; // - maybe to be unified with closeThreshold
+                        onObject = close && close.nonEmpty.distance < height;
+                    }
+                    
+                    velocity.x -= velocity.x * 10.0 * dt;
+                    if (mode !== 'walk') {
+                        velocity.y -= velocity.y * 10.0 * dt;
+                    }
+                    velocity.z -= velocity.z * 10.0 * dt;
+
+                    if (options.movement.mode === 'walk') {
+                        velocity.y -= 9.8 * 10.0 * dt; // 100.0 = mass
+                    }
+
+                    direction.z = Number(moveForward) - Number(moveBackward);
+                    direction.y = Number(moveDown) - Number(moveUp);
+                    direction.x = Number(moveLeft) - Number(moveRight);
+                    direction.normalize(); // this ensures consistent movements in all directions
+                    
+                    let speed = options.movement.speed;
+                    if (options.movement.mode === 'walk') {
+                        speed = 75;
+                    }
+                    if (isSprinting) speed *= 1.5;
+                    //speed = 100.0; // - to do: use a speed more like this one when walking is implemented
+
+                    if (moveForward || moveBackward) velocity.z -= direction.z * speed * dt;
+                    if (moveUp || moveDown) velocity.y -= direction.y * speed * dt;
+                    if (moveLeft || moveRight) velocity.x -= direction.x * speed * dt;
+
+                    if (onObject === true && mode === 'walk') {
+                        velocity.y = Math.max(0, velocity.y);
+                        canJump = true;
+                    }
+
+                    // Only allow movement while inside loaded chunks:
+                    // (lest ye suffer the fate o' never-endin' falls)
+                    if (close || mode === 'noclip') { 
+                        controls.getObject().translateX(velocity.x * dt);
+                        controls.getObject().translateY(velocity.y * dt);
+                        controls.getObject().translateZ(velocity.z * dt);
+                    }
+                    
+                    if (options.movement.mode !== 'noclip') {
+                        let t1 = Date.now();
+                        
+                        const object = controls.getObject();
+                        const p = new THREE.Vector3(position.x, position.y, position.z);
+                        
+                        // - test to handle multiple blocks of height (though really it shouldn't be this way):
+                        // just... loop a short while
+                        for (let heightI = 0; heightI < 2; ++heightI) {
+                            const close = world.findNear(p);
+                            // - to do: disallow movement if empty is undefined (i.e. chunks are not yet loaded)
+                            const closeThreshold = 1.0; // - will need tuning
+                            //if (close && close.nonEmpty.distance !== Infinity) console.log(close.nonEmpty.distance);
+                            
+                            //if (this.mutilatedFirstAttempt)
+                            if (close &&
+                                close.nonEmpty.distance !== Infinity &&
+                                close.nonEmpty.distance < closeThreshold &&
+                                close.empty.distance !== Infinity) // - perhaps we ought to search farther in this case?
+                            {
+                                // - to do, probably: correct normal (easy since this is a block world)
+                                // (though with potential block-based moving vehicles and so in the future...
+                                // this might require some thought, to be properly oriented)
+                                const offset = closeThreshold - close.nonEmpty.distance;
+                                position.add(close.empty.vector.clone().multiplyScalar(offset));
+                                if (false)
+                                // - more experimental:
+                                for (let k of ['x', 'y', 'z']) {
+                                    const offset = p[k] - close.nonEmpty.blockId[k];
+                                    if (offset < 0 || offset > 1) continue;
+                                    const factor = 2;
+                                    if (offset < 0.5) position[k] -= offset * factor;
+                                    else position[k] += 1.0 - offset * factor;
+                                    /*if (Math.abs(offset) < closeThreshold) {
+                                        position[k] += -offset * 10.0;
+                                    }*/
+                                }
+                                /*
+                                const worldVelocity = velocity.clone().applyQuaternion(object.quaternion);
+                                const dir = close.nonEmpty.blockOffset.normalize();
+                                worldVelocity.sub(dir.multiplyScalar(worldVelocity.dot(dir)));
+                                //velocity = new THREE.Vector3(); // - for the time being
+                                velocity = worldVelocity.applyQuaternion(object.quaternion.clone().inverse());*/
+                            }
+                            p.y -= 1.5;
+                        }
+                        
+                        if (this.nowHeresTheSecondOne)
+                        {
+                        // - very nearly working (detection, anyway), but there's some edge case left giving intersections too far away
+                        // - new attempt, now using the brand new and shiny ray intersect:
+                        const hit = world.rayIntersect(lastPosition, position);
+                        if (hit.block) {
+                            const current = position.clone();
+                            
+                            /*
+                            position.copy(hit.position);
+                            const b = hit.block;
+                            console.log('A block was hit: (' + b.x + ', ' + b.y + ', ' + b.z + '), distance: ' + hit.distance);
+                            console.log('Last position: (' + lastPosition.x + ', ' + lastPosition.y + ', ' + lastPosition.z + ')');
+                            console.log('Current position: (' + current.x + ', ' + current.y + ', ' + current.z + ')');
+                            console.log('Hit position: (' + hit.position.x + ', ' + hit.position.y + ', ' + hit.position.z + ')');*/
+                        }
+                        }
+                        
+                        // Selection highlight
+                        {
+                            const mesh = highlight.mesh;
+                            const forward = new THREE.Vector3();
+                            camera.getWorldDirection(forward);
+                            const selectDistance = 4.0; // - to tune
+                            const hit = world.rayIntersect(position, forward.multiplyScalar(selectDistance).add(position));
+                            if (hit && hit.block) {
+                                mesh.visible = true;
+                                mesh.position.copy(hit.block).addScalar(0.5);
+                            } else {
+                                mesh.visible = false;
+                            }
+                        }
+                        
+                        //console.log('Intersection tests in ' + (Date.now() - t1));
+                    }
+                }
+                    
+                
+                {
+                    const bgColor = new THREE.Color(options.display.background);
+                    uniforms.u_fogColor.value = bgColor;
+                    renderer.setClearColor(bgColor);
+                    scene.fog.color = bgColor;
+                    
+                    const far = world.chunkResolution.x * world.viewDistance;
+                    const near = far * 0.3;
+                    uniforms.u_fogMinDist.value = near;
+                    uniforms.u_fogMaxDist.value = far;
+                }
+                highlight.uniforms.time.value = time;
+                mat.uniforms.time.value = time;
+                
+                // To avoid floating-point problems:
+                const cameraPosition = camera.position;
+                world.viewDistance = options.quality.viewDistance;
+                world.generators = options.quality.generators;
+                if (options.display.generate) world.update(camera, position);
+                camera.position = new THREE.Vector3(0, 0, 0);
+				renderer.render(scene, camera);
+                camera.position = cameraPosition;
+			};
+			requestAnimationFrame(render);
+		</script>
+	</body>
+</html>
